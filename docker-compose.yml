@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: taskflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  user-service:
+    build:
+      context: ./services/user-service
+    container_name: taskflow-user-service
+    restart: unless-stopped
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/users_db?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: "1h"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  task-service:
+    build:
+      context: ./services/task-service
+    container_name: taskflow-task-service
+    restart: unless-stopped
+    environment:
+      PORT: 3002
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/tasks_db?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+      NOTIFICATION_SERVICE_URL: http://notification-service:3003
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3002:3002"
+    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+    container_name: taskflow-notification-service
+    restart: unless-stopped
+    environment:
+      PORT: 3003
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notifications_db?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3003:3003"
+    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+    container_name: taskflow-api-gateway
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      USER_SERVICE_URL: http://user-service:3001
+      TASK_SERVICE_URL: http://task-service:3002
+      NOTIFICATION_SERVICE_URL: http://notification-service:3003
+    depends_on:
+      - user-service
+      - task-service
+      - notification-service
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+
