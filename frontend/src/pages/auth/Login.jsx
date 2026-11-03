@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ListTodo, Mail, Lock } from "lucide-react";
-import { useAuth } from "../../context/AuthContext";
+import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { useAuth } from "../../context/useAuth";
+import AuthLayout from "./AuthLayout";
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -13,6 +14,7 @@ export default function Login() {
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   function handleChange(event) {
     setFormData((previous) => ({
@@ -38,95 +40,74 @@ export default function Login() {
       if (!result.success) {
         setError(result.message);
       }
+    } catch {
+      setError("Unable to sign in. Please try again.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
-        <div className="mb-7 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 text-white">
-            <ListTodo size={30} />
+    <AuthLayout mode="login">
+      <form onSubmit={handleSubmit} className="auth-form">
+        <div className="auth-field">
+          <label htmlFor="email">Email Address</label>
+          <div className="auth-input-wrap">
+            <Mail size={18} />
+            <input
+              id="email"
+              type="email"
+              name="email"
+              autoComplete="email"
+              required
+              value={formData.email}
+              onChange={handleChange}
+              placeholder="you@example.com"
+            />
           </div>
-
-          <h1 className="text-3xl font-bold text-slate-900">
-            Welcome Back
-          </h1>
-
-          <p className="mt-2 text-sm text-slate-500">
-            Sign in to continue to TaskFlow
-          </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-700">
-              Email Address
-            </label>
-
-            <div className="flex items-center gap-3 rounded-xl border border-slate-200 px-4">
-              <Mail size={19} className="text-slate-400" />
-
-              <input
-                id="email"
-                type="email"
-                name="email"
-                autoComplete="email"
-                required
-                value={formData.email}
-                onChange={handleChange}
-                placeholder="you@example.com"
-                className="w-full py-3 outline-none"
-              />
-            </div>
+        <div className="auth-field">
+          <label htmlFor="password">Password</label>
+          <div className="auth-input-wrap">
+            <Lock size={18} />
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              name="password"
+              autoComplete="current-password"
+              required
+              value={formData.password}
+              onChange={handleChange}
+              placeholder="Enter your password"
+            />
+            <button
+              type="button"
+              className="auth-password-toggle"
+              onClick={() => setShowPassword((value) => !value)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
           </div>
+        </div>
 
-          <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-700">
-              Password
-            </label>
+        {error && (
+          <p role="alert" className="auth-error">
+            {error}
+          </p>
+        )}
 
-            <div className="flex items-center gap-3 rounded-xl border border-slate-200 px-4">
-              <Lock size={19} className="text-slate-400" />
+        <button type="submit" disabled={loading} className="auth-submit">
+          {loading ? "Signing in..." : "Sign In"}
+          {!loading && <ArrowRight size={18} />}
+        </button>
 
-              <input
-                id="password"
-                type="password"
-                name="password"
-                autoComplete="current-password"
-                required
-                value={formData.password}
-                onChange={handleChange}
-                placeholder="Enter your password"
-                className="w-full py-3 outline-none"
-              />
-            </div>
-          </div>
-
-          {error && (
-            <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-600">
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-xl bg-indigo-600 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-        </form>
-
-        <p className="mt-6 text-center text-sm text-slate-600">
+        <p className="auth-switch">
           Don't have an account?{" "}
-          <Link to="/register" className="font-semibold text-indigo-600 hover:text-indigo-700">
-            Create account
-          </Link>
+          <Link to="/register">Create account</Link>
         </p>
-      </div>
-    </div>
+      </form>
+    </AuthLayout>
   );
 }

@@ -1,14 +1,12 @@
 import {
-  createContext,
-  useContext,
+  useEffect,
   useState,
 } from "react";
 
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { getApiError } from "../services/api";
-
-const AuthContext = createContext(null);
+import AuthContext from "./AuthContextStore";
 
 function readSavedUser() {
   try {
@@ -27,6 +25,19 @@ export function AuthProvider({ children }) {
   );
 
   const navigate = useNavigate();
+
+  useEffect(() => {
+    function clearInvalidSession() {
+      localStorage.removeItem("taskflow_user");
+      localStorage.removeItem("taskflow_token");
+      setUser(null);
+      setToken(null);
+      navigate("/login", { replace: true });
+    }
+
+    window.addEventListener("taskflow:authentication-invalid", clearInvalidSession);
+    return () => window.removeEventListener("taskflow:authentication-invalid", clearInvalidSession);
+  }, [navigate]);
 
   function saveSession(userData, accessToken) {
     localStorage.setItem("taskflow_user", JSON.stringify(userData));
@@ -92,7 +103,14 @@ export function AuthProvider({ children }) {
   });
 }
 
-  function logout() {
+  async function logout() {
+    try {
+      if (localStorage.getItem("taskflow_token")) {
+        await api.post("/api/users/logout");
+      }
+    } catch {
+      // Clear local credentials even if the server is unreachable or the token expired.
+    }
     localStorage.removeItem("taskflow_user");
     localStorage.removeItem("taskflow_token");
 
@@ -116,8 +134,4 @@ export function AuthProvider({ children }) {
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  return useContext(AuthContext);
 }

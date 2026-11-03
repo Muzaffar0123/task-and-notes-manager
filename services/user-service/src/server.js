@@ -3,6 +3,8 @@ require("dotenv").config();
 const express = require("express");
 const prisma = require("./config/prisma");
 const userRoutes = require("./routes/userRoutes");
+const { createUserOutboxWorker } = require("./events/userOutboxWorker");
+const { userEventPublisher } = require("./events/userEventPublisher");
 
 const app = express();
  
@@ -48,6 +50,19 @@ const PORT = process.env.PORT || 3001;
 const server = app.listen(PORT, () => {
   console.log(`User Service running on port ${PORT}`);
 });
+const rabbitConfigured = Boolean(
+  process.env.RABBITMQ_URL ||
+  (process.env.RABBITMQ_USER && process.env.RABBITMQ_PASSWORD)
+);
+const userOutboxWorker = rabbitConfigured
+  ? createUserOutboxWorker({ prisma, publisher: userEventPublisher })
+  : null;
+
+if (userOutboxWorker) {
+  userOutboxWorker.start();
+} else {
+  console.warn("RabbitMQ is not configured; UserRegistered events will remain in the outbox");
+}
 
 // Gracefully close server and database connection
 async function shutdown() {
@@ -55,6 +70,8 @@ async function shutdown() {
 
   server.close(async () => {
     try {
+      await userOutboxWorker?.stop();
+      await userEventPublisher.close();
       await prisma.$disconnect();
       console.log("Database connection closed");
       process.exit(0);

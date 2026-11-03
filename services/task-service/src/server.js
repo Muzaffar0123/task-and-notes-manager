@@ -3,6 +3,8 @@ require("dotenv").config();
 const express = require("express");
 const prisma = require("./config/prisma");
 const taskRoutes = require("./routes/taskRoutes");
+const { taskEventPublisher } = require("./events/taskEventPublisher");
+const { createTaskEventWorker } = require("./events/taskEventWorker");
 
 const app = express();
 
@@ -30,6 +32,20 @@ app.get("/health", async (req, res) => {
 
 app.use("/api/tasks", taskRoutes);
 
+const rabbitConfigured = Boolean(
+  process.env.RABBITMQ_URL ||
+  (process.env.RABBITMQ_USER && process.env.RABBITMQ_PASSWORD)
+);
+const taskEventWorker = rabbitConfigured
+  ? createTaskEventWorker({ prisma, publisher: taskEventPublisher })
+  : null;
+
+if (taskEventWorker) {
+  taskEventWorker.start();
+} else {
+  console.warn("RabbitMQ is not configured; task events will remain in the outbox");
+}
+
 app.use((req, res) => {
   return res.status(404).json({
     success: false,
@@ -45,8 +61,15 @@ const server = app.listen(PORT, () => {
 
 async function shutdown() {
   server.close(async () => {
-    await prisma.$disconnect();
-    process.exit(0);
+    try {
+      await taskEventWorker?.stop();
+      await taskEventPublisher.close();
+      await prisma.$disconnect();
+      process.exit(0);
+    } catch (error) {
+      console.error("Error shutting down Task Service:", error);
+      process.exit(1);
+    }
   });
 }
 

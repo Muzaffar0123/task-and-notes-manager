@@ -2,50 +2,29 @@ require("dotenv").config();
 
 const express = require("express");
 const prisma = require("./config/prisma");
-const notificationRoutes = require("./routes/notificationRoutes");
-
-const app = express();
-
-app.use(express.json());
-
-app.get("/health", async (req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-
-    return res.status(200).json({
-      success: true,
-      service: "notification-service",
-      database: "connected",
-    });
-  } catch (error) {
-    console.error("Notification Service health check failed:", error);
-
-    return res.status(503).json({
-      success: false,
-      service: "notification-service",
-      database: "disconnected",
-    });
-  }
-});
-
-app.use("/api/notifications", notificationRoutes);
-
-app.use((req, res) => {
-  return res.status(404).json({
-    success: false,
-    message: "Route not found",
-  });
-});
-
+const { createApp } = require("./app");
+const { createNotificationEventConsumer } = require("./events/notificationEventConsumer");
+const rabbitConfigured = Boolean(
+  process.env.RABBITMQ_URL ||
+  (process.env.RABBITMQ_USER && process.env.RABBITMQ_PASSWORD)
+);
+const eventConsumer = rabbitConfigured ? createNotificationEventConsumer() : null;
+const app = createApp({ eventConsumer });
 const PORT = process.env.PORT || 3003;
-
 const server = app.listen(PORT, () => {
   console.log(`Notification Service running on port ${PORT}`);
 });
 
+if (eventConsumer) {
+  void eventConsumer.start();
+} else {
+  console.warn("RabbitMQ is not configured; notification events will not be consumed");
+}
+
 async function shutdown() {
   server.close(async () => {
     try {
+      await eventConsumer?.stop();
       await prisma.$disconnect();
       process.exit(0);
     } catch (error) {

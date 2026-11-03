@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
+const prisma = require("../config/prisma");
 
-function authenticateToken(req, res, next) {
+async function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
   // Check whether the Authorization header exists
@@ -31,28 +32,65 @@ function authenticateToken(req, res, next) {
   }
 
   // Verify token signature, expiry and issuer
-  jwt.verify(
-    token,
-    process.env.JWT_SECRET,
-    {
+  let decoded;
+
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET, {
       issuer: "taskflow-user-service",
-    },
-    (error, decoded) => {
-      if (error) {
-        return res.status(401).json({
-          success: false,
-          message: "Invalid or expired access token",
-        });
-      }
+    });
+  } catch {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired access token",
+    });
+  }
 
-      // Store authenticated user's ID for downstream handlers
-      req.user = {
-        id: decoded.sub,
-      };
+  if (
+    !decoded ||
+    typeof decoded !== "object" ||
+    typeof decoded.sub !== "string"
+  ) {
+    return res.status(401).json({
+      success: false,
+      message: "Invalid or expired access token",
+    });
+  }
 
-      next();
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.sub },
+      select: { id: true, tokenVersion: true, role: true, status: true },
+    });
+    const tokenVersion = decoded.ver ?? 0;
+
+    if (
+      !user ||
+      !Number.isInteger(tokenVersion) ||
+      tokenVersion !== user.tokenVersion
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired access token",
+      });
     }
-  );
+
+    if ((user.status || "ACTIVE") !== "ACTIVE") {
+      return res.status(403).json({
+        success: false,
+        message: "This account is not active",
+      });
+    }
+
+    req.user = { id: user.id, role: user.role || "USER" };
+    return next();
+  } catch (error) {
+    console.error("Authentication verification failed:", error);
+
+    return res.status(503).json({
+      success: false,
+      message: "Authentication service unavailable",
+    });
+  }
 }
 
 module.exports = authenticateToken;

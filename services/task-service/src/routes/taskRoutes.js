@@ -3,6 +3,7 @@ const express = require("express");
 const {
   createTask,
   getTasks,
+  getTaskStatistics,
   getTaskById,
   updateTask,
   deleteTask,
@@ -15,6 +16,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 router.post("/", createTask);
+router.get("/statistics", getTaskStatistics);
 router.get("/", getTasks);
 router.get("/:id", getTaskById);
 router.patch("/:id", updateTask);

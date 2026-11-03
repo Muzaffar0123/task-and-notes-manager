@@ -1,4 +1,18 @@
 services:
+  seaweedfs:
+    image: chrislusf/seaweedfs@sha256:c2658820e763294a9e9de7b36c81e59b879e3459148351aee4e31a126ca64860
+    container_name: taskflow-seaweedfs
+    restart: unless-stopped
+    command: ["mini", "-dir=/data", "-ip=seaweedfs", "-ip.bind=0.0.0.0", "-bucket=${S3_BUCKET:-taskflow-files}"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+      S3_BUCKET: ${S3_BUCKET:-taskflow-files}
+    ports:
+      - "127.0.0.1:9000:8333"
+    volumes:
+      - seaweedfs_data:/data
+
   postgres:
     image: postgres:16-alpine
     container_name: taskflow-postgres
@@ -28,12 +42,86 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/users_db?schema=public
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: "1h"
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:?RABBITMQ_USER must be set}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs:8333}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-taskflow-files}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      PROFILE_IMAGE_MAX_BYTES: ${PROFILE_IMAGE_MAX_BYTES:-5242880}
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+      notification-service:
+        condition: service_healthy
     ports:
       - "3001:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  rabbitmq:
+    image: rabbitmq:3.13-alpine
+    container_name: taskflow-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?RABBITMQ_USER must be set}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  notes-db-init:
+    image: postgres:16-alpine
+    container_name: taskflow-notes-db-init
+    restart: "no"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - >-
+        if ! PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U "$$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'notes_db'" | grep -q 1; then
+          PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U "$$POSTGRES_USER" -d postgres -c 'CREATE DATABASE notes_db';
+        fi
+
+  social-db-init:
+    image: postgres:16-alpine
+    container_name: taskflow-social-db-init
+    restart: "no"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - sh
+      - -c
+      - >-
+        if ! PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U "$$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'social_db'" | grep -q 1; then
+          PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U "$$POSTGRES_USER" -d postgres -c 'CREATE DATABASE social_db';
+        fi
 
   task-service:
     build:
@@ -45,11 +133,25 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/tasks_db?schema=public
       JWT_SECRET: ${JWT_SECRET}
       NOTIFICATION_SERVICE_URL: http://notification-service:3003
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:?RABBITMQ_USER must be set}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
     ports:
       - "3002:3002"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
 
   notification-service:
@@ -61,11 +163,108 @@ services:
       PORT: 3003
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notifications_db?schema=public
       JWT_SECRET: ${JWT_SECRET}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:?RABBITMQ_USER must be set}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
+      SOCIAL_SERVICE_URL: http://social-service:3005
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must be set}
+      EMAIL_PROVIDER_URL: ${EMAIL_PROVIDER_URL:-}
+      EMAIL_PROVIDER_API_KEY: ${EMAIL_PROVIDER_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      EMAIL_TIMEOUT_MS: ${EMAIL_TIMEOUT_MS:-5000}
+      NOTIFICATION_MAX_RETRIES: ${NOTIFICATION_MAX_RETRIES:-5}
+      NOTIFICATION_RETRY_DELAY_MS: ${NOTIFICATION_RETRY_DELAY_MS:-5000}
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     ports:
       - "3003:3003"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  notes-service:
+    build:
+      context: ./services/notes-service
+    container_name: taskflow-notes-service
+    restart: unless-stopped
+    environment:
+      PORT: 3004
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notes_db?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+      ADMIN_USER_IDS: ${NOTES_ADMIN_USER_IDS:-}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:?RABBITMQ_USER must be set}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://seaweedfs:8333}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-taskflow-files}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY must be set}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY must be set}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      MAX_UPLOAD_BYTES: ${NOTES_MAX_UPLOAD_BYTES:-10485760}
+      S3_SERVER_SIDE_ENCRYPTION: ${S3_SERVER_SIDE_ENCRYPTION:-}
+    depends_on:
+      notes-db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+      notification-service:
+        condition: service_healthy
+    ports:
+      - "3004:3004"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3004/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
+
+  social-service:
+    build:
+      context: ./services/social-service
+    container_name: taskflow-social-service
+    restart: unless-stopped
+    environment:
+      PORT: 3005
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/social_db?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: http://user-service:3001
+      NOTES_SERVICE_URL: http://notes-service:3004
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?INTERNAL_SERVICE_TOKEN must be set}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USER: ${RABBITMQ_USER:?RABBITMQ_USER must be set}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
+    depends_on:
+      social-db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      notes-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    ports:
+      - "3005:3005"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3005/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
     command: ["sh", "-c", "npx prisma migrate deploy && npm start"]
 
   api-gateway:
@@ -75,16 +274,40 @@ services:
     restart: unless-stopped
     environment:
       PORT: 3000
-      USER_SERVICE_URL: http://user-service:3001
-      TASK_SERVICE_URL: http://task-service:3002
-      NOTIFICATION_SERVICE_URL: http://notification-service:3003
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: ${USER_SERVICE_URL:-http://user-service:3001}
+      TASK_SERVICE_URL: ${TASK_SERVICE_URL:-http://task-service:3002}
+      NOTIFICATION_SERVICE_URL: ${NOTIFICATION_SERVICE_URL:-http://notification-service:3003}
+      NOTES_SERVICE_URL: ${NOTES_SERVICE_URL:-http://notes-service:3004}
+      SOCIAL_SERVICE_URL: ${SOCIAL_SERVICE_URL:-http://social-service:3005}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      GATEWAY_ADMIN_USER_IDS: ${GATEWAY_ADMIN_USER_IDS:-}
+      API_RATE_LIMIT_WINDOW_MS: ${API_RATE_LIMIT_WINDOW_MS:-900000}
+      API_RATE_LIMIT_MAX: ${API_RATE_LIMIT_MAX:-300}
+      AUTH_RATE_LIMIT_WINDOW_MS: ${AUTH_RATE_LIMIT_WINDOW_MS:-900000}
+      AUTH_RATE_LIMIT_MAX: ${AUTH_RATE_LIMIT_MAX:-10}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-10000}
     depends_on:
-      - user-service
-      - task-service
-      - notification-service
+      user-service:
+        condition: service_healthy
+      task-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+      notes-service:
+        condition: service_healthy
+      social-service:
+        condition: service_healthy
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/ready').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
 
 volumes:
   postgres_data:
-
+  rabbitmq_data:
+  seaweedfs_data:

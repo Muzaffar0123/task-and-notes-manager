@@ -1,0 +1,130 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Follow {
+  id         String   @id @default(uuid())
+  followerId String
+  followeeId String
+  createdAt  DateTime @default(now())
+
+  @@unique([followerId, followeeId])
+  @@index([followerId, createdAt])
+  @@index([followeeId, createdAt])
+}
+
+model EligibleNote {
+  noteId        String   @id
+  ownerId       String
+  publishedAt   DateTime
+  likeCount     Int      @default(0)
+  commentCount  Int      @default(0)
+  ratingCount   Int      @default(0)
+  ratingAverage Float    @default(0)
+  ratingTotal   Int      @default(0)
+  popularityScore Int    @default(0)
+  updatedAt     DateTime @updatedAt
+
+  @@index([ownerId, publishedAt])
+  @@index([publishedAt])
+  @@index([likeCount, commentCount, ratingAverage, publishedAt])
+  @@index([ownerId, popularityScore])
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  userId    String
+  noteId    String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, noteId])
+  @@index([noteId, createdAt])
+}
+
+model Comment {
+  id        String     @id @default(uuid())
+  noteId    String
+  userId    String
+  parentId  String?
+  content   String     @db.VarChar(5000)
+  deletedAt DateTime?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  parent    Comment?   @relation("CommentReplies", fields: [parentId], references: [id], onDelete: SetNull)
+  replies   Comment[]  @relation("CommentReplies")
+
+  @@index([noteId, parentId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model Rating {
+  id        String   @id @default(uuid())
+  userId    String
+  noteId    String
+  value     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, noteId])
+  @@index([noteId, value])
+}
+
+model Bookmark {
+  id        String           @id @default(uuid())
+  userId    String
+  noteId    String
+  createdAt DateTime         @default(now())
+  items     CollectionItem[]
+
+  @@unique([userId, noteId])
+  @@index([userId, createdAt])
+}
+
+model Collection {
+  id        String           @id @default(uuid())
+  userId    String
+  name      String           @db.VarChar(100)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  items     CollectionItem[]
+
+  @@unique([userId, name])
+  @@index([userId, updatedAt])
+}
+
+model CollectionItem {
+  id           String     @id @default(uuid())
+  collectionId String
+  bookmarkId   String
+  createdAt    DateTime   @default(now())
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  bookmark     Bookmark   @relation(fields: [bookmarkId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, bookmarkId])
+  @@index([collectionId, createdAt])
+  @@index([bookmarkId])
+}
+
+model SocialEventOutbox {
+  id          String   @id @default(uuid())
+  eventType   String
+  noteId      String?
+  actorId     String
+  payload     Json
+  createdAt   DateTime @default(now())
+  publishedAt DateTime?
+  attempts    Int      @default(0)
+
+  @@index([publishedAt, createdAt])
+}
+
+model SocialProcessedEvent {
+  eventId     String   @id
+  eventType   String
+  processedAt DateTime @default(now())
+}

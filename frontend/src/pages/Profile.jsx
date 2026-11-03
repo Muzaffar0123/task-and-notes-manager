@@ -1,116 +1,122 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  UserRound,
-  Mail,
   CalendarDays,
+  CheckCircle2,
   Clock3,
   LoaderCircle,
-  RefreshCw,
-  ShieldCheck,
+  Mail,
   Pencil,
-  X,
+  RefreshCw,
   Save,
-  CheckCircle2,
+  ShieldCheck,
+  UserRound,
+  X,
 } from "lucide-react";
 
 import api, { getApiError } from "../services/api";
-import { useAuth } from "../context/AuthContext";
+import { useAuth } from "../context/useAuth";
 
 function formatDate(value) {
   if (!value) return "Not available";
-
   const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) return "Not available";
-
-  return new Intl.DateTimeFormat("en-PK", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(date);
+  return Number.isNaN(date.getTime())
+    ? "Not available"
+    : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(date);
 }
 
 function getInitials(name) {
-  return (
-    name
-      ?.trim()
-      .split(/\s+/)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase())
-      .join("") || "U"
-  );
+  return name?.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "U";
 }
 
 function ProfileItem({ icon: Icon, label, value }) {
   return (
-    <div className="flex items-start gap-4 rounded-xl border border-slate-100 p-4">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-        <Icon size={20} />
+    <div className="account-profile-detail">
+      <span className="account-profile-detail-icon"><Icon size={17} aria-hidden="true" /></span>
+      <div className="account-profile-detail-copy">
+        <span>{label}</span>
+        <strong>{value || "Not available"}</strong>
       </div>
+    </div>
+  );
+}
 
-      <div className="min-w-0">
-        <p className="text-sm text-slate-500">{label}</p>
-        <p className="mt-1 break-words font-medium text-slate-800">
-          {value || "Not available"}
-        </p>
-      </div>
+function ProfileSkeleton() {
+  return (
+    <div className="account-profile-skeleton" role="status" aria-label="Loading your profile">
+      <span className="account-profile-skeleton-hero" />
+      <div><span /><span /><span /></div>
+      <p>Loading your profile…</p>
     </div>
   );
 }
 
 export default function Profile() {
   const { user: savedUser, updateUser } = useAuth();
-
   const [profile, setProfile] = useState(savedUser);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [form, setForm] = useState({ name: "", email: "" });
+  const [form, setForm] = useState({ name: "", email: "", username: "", bio: "" });
+  const [avatarState, setAvatarState] = useState(null);
 
-  async function fetchProfile() {
+  const fetchProfile = useCallback(async () => {
     setLoading(true);
     setError("");
-
+    setSuccess("");
     try {
       const response = await api.get("/api/users/profile");
       const user = response.data?.user;
-
-      if (!user) {
-        throw new Error("The server returned an invalid profile response.");
-      }
-
+      if (!user) throw new Error("The server returned an invalid profile response.");
       setProfile(user);
-      setForm({ name: user.name || "", email: user.email || "" });
-    } catch (err) {
-      setError(
-        err.response ? getApiError(err) : err.message || getApiError(err)
-      );
+      setForm({ name: user.name || "", email: user.email || "", username: user.username || "", bio: user.bio || "" });
+    } catch (fetchError) {
+      setError(fetchError.response ? getApiError(fetchError) : fetchError.message || getApiError(fetchError));
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    fetchProfile();
   }, []);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => { fetchProfile(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [fetchProfile]);
+
+  useEffect(() => {
+    let active = true;
+    let objectUrl = "";
+    if (!profile?.hasProfileImage) return undefined;
+    api.get("/api/users/profile/image", { responseType: "blob" })
+      .then((response) => {
+        if (!active) return;
+        objectUrl = URL.createObjectURL(response.data);
+        setAvatarState({ userId: profile.id, url: objectUrl, error: "" });
+      })
+      .catch((imageError) => {
+        if (active) setAvatarState({ userId: profile.id, url: "", error: getApiError(imageError) });
+      });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [profile?.id, profile?.hasProfileImage]);
+
+  const currentAvatar = avatarState?.userId === profile?.id ? avatarState : null;
+  const avatarUrl = profile?.hasProfileImage ? currentAvatar?.url : "";
+  const avatarLoading = Boolean(profile?.hasProfileImage && !currentAvatar);
+  const avatarError = profile?.hasProfileImage ? currentAvatar?.error : "";
+
   function startEditing() {
-    setForm({
-      name: profile?.name || "",
-      email: profile?.email || "",
-    });
+    setForm({ name: profile?.name || "", email: profile?.email || "", username: profile?.username || "", bio: profile?.bio || "" });
     setError("");
     setSuccess("");
     setEditing(true);
   }
 
   function cancelEditing() {
-    setForm({
-      name: profile?.name || "",
-      email: profile?.email || "",
-    });
+    setForm({ name: profile?.name || "", email: profile?.email || "", username: profile?.username || "", bio: profile?.bio || "" });
     setEditing(false);
     setError("");
   }
@@ -127,250 +133,122 @@ export default function Profile() {
 
     const name = form.name.trim();
     const email = form.email.trim().toLowerCase();
-
-    if (!name) {
-      setError("Please enter your full name.");
-      return;
-    }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setError("Please enter a valid email address.");
-      return;
-    }
+    const username = form.username.trim().toLowerCase();
+    const bio = form.bio.trim();
+    if (!name) return setError("Please enter your full name.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setError("Please enter a valid email address.");
+    if (!/^[a-z0-9_]{3,30}$/.test(username)) return setError("Username must be 3 to 30 letters, numbers, or underscores.");
+    if (bio.length > 500) return setError("Your bio must be 500 characters or fewer.");
 
     setSaving(true);
-
     try {
-      const response = await api.put("/api/users/profile", {
-        name,
-        email,
-      });
-
-      const updatedUser = response.data?.user;
-
-      if (!updatedUser) {
-        throw new Error("The server returned an invalid profile response.");
-      }
-
+      const response = await api.put("/api/users/profile", { name, email, username, bio });
+      if (!response.data?.user) throw new Error("The server returned an invalid profile response.");
+      const updatedUser = { ...profile, ...response.data.user };
       setProfile(updatedUser);
-      setForm({ name: updatedUser.name, email: updatedUser.email });
-
-      if (typeof updateUser === "function") {
-        updateUser(updatedUser);
-      }
-
+      setForm({ name: updatedUser.name || "", email: updatedUser.email || "", username: updatedUser.username || "", bio: updatedUser.bio || "" });
+      if (typeof updateUser === "function") updateUser(updatedUser);
       setEditing(false);
       setSuccess("Your profile has been updated successfully.");
-    } catch (err) {
-      setError(
-        err.response ? getApiError(err) : err.message || getApiError(err)
-      );
+    } catch (saveError) {
+      setError(saveError.response ? getApiError(saveError) : saveError.message || getApiError(saveError));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="account-profile-page">
+      <header className="account-profile-heading">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">My Profile</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Manage your personal information and account details.
-          </p>
+          <p className="account-profile-eyebrow">ACCOUNT SETTINGS</p>
+          <h1>My profile</h1>
+          <p>Manage your personal details and review your TaskFlow account.</p>
         </div>
-
-        <button
-          type="button"
-          onClick={fetchProfile}
-          disabled={loading || saving}
-          className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-        >
-          <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
-          Refresh
+        <button type="button" className="account-profile-secondary-button" onClick={fetchProfile} disabled={loading || saving}>
+          <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> Refresh
         </button>
-      </div>
+      </header>
 
-      {error && (
-        <div
-          role="alert"
-          className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"
-        >
-          {error}
-        </div>
-      )}
+      {error && <div className="account-profile-alert" role="alert"><span>{error}</span>{!profile && <button type="button" onClick={fetchProfile} disabled={loading}>Try again</button>}</div>}
+      {success && <div className="account-profile-notice" role="status"><CheckCircle2 size={17} />{success}</div>}
 
-      {success && (
-        <div
-          role="status"
-          className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700"
-        >
-          <CheckCircle2 size={18} />
-          {success}
-        </div>
-      )}
-
-      {loading && !profile ? (
-        <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white">
-          <div className="flex items-center gap-3 text-slate-500">
-            <LoaderCircle className="animate-spin" size={22} />
-            Loading your profile...
-          </div>
-        </div>
+      {loading && !profile ? <ProfileSkeleton /> : !profile ? (
+        <section className="account-profile-empty">
+          <span><UserRound size={22} /></span>
+          <h2>Profile unavailable</h2>
+          <p>We couldn’t load your account details. Try again in a moment.</p>
+          <button type="button" className="account-profile-primary-button" onClick={fetchProfile} disabled={loading}>Retry</button>
+        </section>
       ) : (
         <>
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="h-28 bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-500" />
-
-            <div className="px-6 pb-6 sm:px-8">
-              <div className="-mt-12 flex flex-col items-center gap-4 sm:flex-row sm:items-end">
-                <div className="flex h-24 w-24 items-center justify-center rounded-2xl border-4 border-white bg-indigo-100 text-3xl font-bold text-indigo-700 shadow-sm">
-                  {getInitials(profile?.name)}
-                </div>
-
-                <div className="pb-1 text-center sm:text-left">
-                  <h3 className="text-xl font-bold text-slate-900">
-                    {profile?.name || "Your Account"}
-                  </h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    {profile?.email || "Email not available"}
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap justify-center gap-2 pb-1 sm:ml-auto">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
-                    <ShieldCheck size={15} />
-                    Authenticated
-                  </span>
-
-                  {!editing && (
-                    <button
-                      type="button"
-                      onClick={startEditing}
-                      className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700"
-                    >
-                      <Pencil size={15} />
-                      Edit Profile
-                    </button>
-                  )}
+          <section className="account-profile-hero" aria-label="Profile overview">
+            <div className="account-profile-cover" aria-hidden="true"><span /><span /></div>
+            <div className="account-profile-hero-body">
+              <div className="account-profile-avatar-wrap">
+                <div className="account-profile-avatar" aria-label={`${profile.name || "User"} profile image`}>
+                  {avatarUrl ? <img src={avatarUrl} alt="" /> : getInitials(profile.name)}
+                  {avatarLoading && <span className="account-profile-avatar-loading"><LoaderCircle size={18} className="animate-spin" /></span>}
                 </div>
               </div>
+              <div className="account-profile-identity">
+                <h2>{profile.name || "Your account"}</h2>
+                <p>{profile.email || "Email not available"}</p>
+                <span className="account-profile-role"><ShieldCheck size={14} />{profile.role === "ADMIN" ? "Administrator" : "TaskFlow member"}</span>
+                {avatarError && <span className="account-profile-avatar-error" role="status">Profile image unavailable</span>}
+              </div>
+              <button type="button" className="account-profile-primary-button account-profile-edit-button" onClick={editing ? cancelEditing : startEditing} disabled={saving}>
+                {editing ? <X size={15} /> : <Pencil size={15} />}{editing ? "Cancel editing" : "Edit profile"}
+              </button>
             </div>
           </section>
 
-          {editing ? (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-              <div className="mb-6">
-                <h3 className="text-lg font-bold text-slate-900">
-                  Edit Personal Information
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Update your name and email address.
-                </p>
+          <div className="account-profile-grid">
+            <section className="account-profile-card account-profile-personal-card">
+              <div className="account-profile-card-heading">
+                <div><p className="account-profile-eyebrow">PERSONAL DETAILS</p><h2>{editing ? "Edit your information" : "Personal information"}</h2></div>
+                {!editing && <span className="account-profile-card-caption">Private to your account</span>}
               </div>
 
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div>
-                  <label
-                    htmlFor="name"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Full Name
+              {editing ? (
+                <form className="account-profile-form" onSubmit={handleSubmit}>
+                  <label className="account-profile-field">Full name
+                    <span><UserRound size={16} /><input name="name" type="text" autoComplete="name" maxLength={100} required value={form.name} onChange={handleChange} /></span>
                   </label>
-                  <input
-                    id="name"
-                    name="name"
-                    type="text"
-                    autoComplete="name"
-                    maxLength={100}
-                    required
-                    value={form.name}
-                    onChange={handleChange}
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="email"
-                    className="mb-2 block text-sm font-medium text-slate-700"
-                  >
-                    Email Address
+                  <label className="account-profile-field">Username
+                    <span><UserRound size={16} /><input name="username" type="text" autoComplete="username" minLength={3} maxLength={30} pattern="[A-Za-z0-9_]{3,30}" required value={form.username} onChange={handleChange} /></span>
                   </label>
-                  <input
-                    id="email"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    maxLength={254}
-                    required
-                    value={form.email}
-                    onChange={handleChange}
-                    className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
-                  />
+                  <label className="account-profile-field">Bio
+                    <textarea name="bio" maxLength={500} rows={3} value={form.bio} onChange={handleChange} />
+                  </label>
+                  <label className="account-profile-field">Email address
+                    <span><Mail size={16} /><input name="email" type="email" autoComplete="email" maxLength={254} required value={form.email} onChange={handleChange} /></span>
+                  </label>
+                  <div className="account-profile-form-actions">
+                    <button type="button" className="account-profile-secondary-button" onClick={cancelEditing} disabled={saving}><X size={15} /> Cancel</button>
+                    <button type="submit" className="account-profile-primary-button" disabled={saving}>{saving ? <LoaderCircle size={15} className="animate-spin" /> : <Save size={15} />}{saving ? "Saving…" : "Save changes"}</button>
+                  </div>
+                </form>
+              ) : (
+                <div className="account-profile-detail-list">
+                  <ProfileItem icon={UserRound} label="Full name" value={profile.name} />
+                  <ProfileItem icon={UserRound} label="Username" value={`@${profile.username}`} />
+                  <ProfileItem icon={UserRound} label="Bio" value={profile.bio} />
+                  <ProfileItem icon={Mail} label="Email address" value={profile.email} />
                 </div>
-
-                <div className="flex flex-col gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={cancelEditing}
-                    disabled={saving}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                  >
-                    <X size={16} />
-                    Cancel
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={saving}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {saving ? (
-                      <LoaderCircle className="animate-spin" size={16} />
-                    ) : (
-                      <Save size={16} />
-                    )}
-                    {saving ? "Saving..." : "Save Changes"}
-                  </button>
-                </div>
-              </form>
+              )}
             </section>
-          ) : (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
-              <div className="mb-6">
-                <h3 className="text-lg font-bold text-slate-900">
-                  Personal Information
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  Information retrieved from your TaskFlow account.
-                </p>
-              </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <ProfileItem
-                  icon={UserRound}
-                  label="Full Name"
-                  value={profile?.name}
-                />
-                <ProfileItem
-                  icon={Mail}
-                  label="Email Address"
-                  value={profile?.email}
-                />
-                <ProfileItem
-                  icon={CalendarDays}
-                  label="Account Created"
-                  value={formatDate(profile?.createdAt)}
-                />
-                <ProfileItem
-                  icon={Clock3}
-                  label="Last Updated"
-                  value={formatDate(profile?.updatedAt)}
-                />
+            <aside className="account-profile-card account-profile-account-card">
+              <div className="account-profile-card-heading"><div><p className="account-profile-eyebrow">ACCOUNT</p><h2>Account details</h2></div></div>
+              <div className="account-profile-account-status"><span><ShieldCheck size={17} /></span><div><strong>Account active</strong><small>Signed in securely to TaskFlow</small></div></div>
+              <div className="account-profile-account-meta">
+                <ProfileItem icon={ShieldCheck} label="Account type" value={profile.role === "ADMIN" ? "Administrator" : "Member"} />
+                <ProfileItem icon={CalendarDays} label="Member since" value={formatDate(profile.createdAt)} />
+                <ProfileItem icon={Clock3} label="Last updated" value={formatDate(profile.updatedAt)} />
               </div>
-            </section>
-          )}
+            </aside>
+          </div>
         </>
       )}
     </div>

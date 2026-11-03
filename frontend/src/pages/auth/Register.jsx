@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ListTodo } from "lucide-react";
-import { useAuth } from "../../context/AuthContext";
+import {
+  User,
+  Mail,
+  Lock,
+  Eye,
+  EyeOff,
+  ArrowRight,
+} from "lucide-react";
+import { useAuth } from "../../context/useAuth";
+import AuthLayout from "./AuthLayout";
 
 export default function Register() {
   const { signUp } = useAuth();
@@ -15,6 +23,8 @@ export default function Register() {
 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   function handleChange(event) {
     setFormData((previous) => ({
@@ -52,34 +62,20 @@ export default function Register() {
       if (!result.success) {
         setError(result.message);
       }
+    } catch {
+      setError("Unable to create your account. Please try again.");
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4 py-10">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
-        <div className="mb-7 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 text-white">
-            <ListTodo size={30} />
-          </div>
-
-          <h1 className="text-3xl font-bold text-slate-900">
-            Create Account
-          </h1>
-
-          <p className="mt-2 text-sm text-slate-500">
-            Join TaskFlow and organize your work
-          </p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="name" className="mb-2 block text-sm font-medium text-slate-700">
-              Full Name
-            </label>
-
+    <AuthLayout mode="register">
+      <form onSubmit={handleSubmit} className="auth-form auth-register-form">
+        <div className="auth-field">
+          <label htmlFor="name">Full Name</label>
+          <div className="auth-input-wrap">
+            <User size={18} />
             <input
               id="name"
               type="text"
@@ -88,16 +84,15 @@ export default function Register() {
               required
               value={formData.name}
               onChange={handleChange}
-              placeholder="Enter your name"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-500"
+              placeholder="Enter your full name"
             />
           </div>
+        </div>
 
-          <div>
-            <label htmlFor="email" className="mb-2 block text-sm font-medium text-slate-700">
-              Email Address
-            </label>
-
+        <div className="auth-field">
+          <label htmlFor="email">Email Address</label>
+          <div className="auth-input-wrap">
+            <Mail size={18} />
             <input
               id="email"
               type="email"
@@ -107,18 +102,17 @@ export default function Register() {
               value={formData.email}
               onChange={handleChange}
               placeholder="you@example.com"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-500"
             />
           </div>
+        </div>
 
-          <div>
-            <label htmlFor="password" className="mb-2 block text-sm font-medium text-slate-700">
-              Password
-            </label>
-
+        <div className="auth-field">
+          <label htmlFor="password">Password</label>
+          <div className="auth-input-wrap">
+            <Lock size={18} />
             <input
               id="password"
-              type="password"
+              type={showPassword ? "text" : "password"}
               name="password"
               autoComplete="new-password"
               minLength={8}
@@ -126,50 +120,59 @@ export default function Register() {
               value={formData.password}
               onChange={handleChange}
               placeholder="At least 8 characters"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-500"
             />
+            <button
+              type="button"
+              className="auth-password-toggle"
+              onClick={() => setShowPassword((value) => !value)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
           </div>
+        </div>
 
-          <div>
-            <label htmlFor="confirmPassword" className="mb-2 block text-sm font-medium text-slate-700">
-              Confirm Password
-            </label>
-
+        <div className="auth-field">
+          <label htmlFor="confirmPassword">Confirm Password</label>
+          <div className="auth-input-wrap">
+            <Lock size={18} />
             <input
               id="confirmPassword"
-              type="password"
+              type={showConfirmPassword ? "text" : "password"}
               name="confirmPassword"
               autoComplete="new-password"
               required
               value={formData.confirmPassword}
               onChange={handleChange}
               placeholder="Enter password again"
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-indigo-500"
             />
+            <button
+              type="button"
+              className="auth-password-toggle"
+              onClick={() => setShowConfirmPassword((value) => !value)}
+              aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+            >
+              {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+            </button>
           </div>
+        </div>
 
-          {error && (
-            <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-600">
-              {error}
-            </p>
-          )}
+        {error && (
+          <p role="alert" className="auth-error">
+            {error}
+          </p>
+        )}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-xl bg-indigo-600 py-3 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loading ? "Creating account..." : "Create Account"}
-          </button>
-        </form>
+        <button type="submit" disabled={loading} className="auth-submit">
+          {loading ? "Creating account..." : "Create Account"}
+          {!loading && <ArrowRight size={18} />}
+        </button>
 
-        <p className="mt-6 text-center text-sm text-slate-600">
+        <p className="auth-switch">
           Already have an account?{" "}
-          <Link to="/login" className="font-semibold text-indigo-600 hover:text-indigo-700">
-            Sign in
-          </Link>
+          <Link to="/login">Sign in</Link>
         </p>
-      </div>
-    </div>
+      </form>
+    </AuthLayout>
   );
 }

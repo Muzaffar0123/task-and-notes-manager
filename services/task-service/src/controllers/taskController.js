@@ -2,6 +2,45 @@ const prisma = require("../config/prisma");
 
 const allowedStatuses = ["PENDING", "IN_PROGRESS", "COMPLETED"];
 const allowedPriorities = ["LOW", "MEDIUM", "HIGH"];
+const allowedSortFields = [
+  "createdAt",
+  "updatedAt",
+  "dueDate",
+  "title",
+  "status",
+  "priority",
+];
+
+function serializeEventPayload(payload) {
+  return JSON.parse(JSON.stringify(payload));
+}
+
+async function enqueueTaskEvent(transaction, eventType, task) {
+  await transaction.taskEventOutbox.create({
+    data: {
+      eventType,
+      taskId: task.id,
+      userId: task.userId,
+      payload: serializeEventPayload(task),
+    },
+  });
+}
+
+function parsePositiveInteger(value, defaultValue, maximum) {
+  if (typeof value !== "string" || !/^\d+$/.test(value)) return null;
+
+  const parsedValue = Number(value);
+  if (parsedValue < 1 || parsedValue > maximum) return null;
+
+  return parsedValue || defaultValue;
+}
+
+function parseDate(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  const parsedDate = new Date(value);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
 
 // CREATE TASK
 async function createTask(req, res) {
@@ -38,17 +77,22 @@ async function createTask(req, res) {
       }
     }
 
-    const task = await prisma.task.create({
-      data: {
-        title: title.trim(),
-        description:
-          typeof description === "string" && description.trim()
-            ? description.trim()
-            : null,
-        priority: priority || "MEDIUM",
-        dueDate: parsedDueDate,
-        userId: req.user.id,
-      },
+    const task = await prisma.$transaction(async (transaction) => {
+      const createdTask = await transaction.task.create({
+        data: {
+          title: title.trim(),
+          description:
+            typeof description === "string" && description.trim()
+              ? description.trim()
+              : null,
+          priority: priority || "MEDIUM",
+          dueDate: parsedDueDate,
+          userId: req.user.id,
+        },
+      });
+
+      await enqueueTaskEvent(transaction, "TaskCreated", createdTask);
+      return createdTask;
     });
 
     // Send a notification without failing task creation if notifications are unavailable.
@@ -101,15 +145,100 @@ async function createTask(req, res) {
 // GET ALL TASKS FOR LOGGED-IN USER
 async function getTasks(req, res) {
   try {
-    const tasks = await prisma.task.findMany({
-      where: { userId: req.user.id },
-      orderBy: { createdAt: "desc" },
-    });
+    const {
+      search,
+      status,
+      priority,
+      dueDateFrom,
+      dueDateTo,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+      page: pageValue,
+      pageSize: pageSizeValue,
+    } = req.query;
+
+    if (search !== undefined && typeof search !== "string") {
+      return res.status(400).json({ success: false, message: "Search must be a string" });
+    }
+
+    if (typeof search === "string" && search.length > 200) {
+      return res.status(400).json({ success: false, message: "Search must be 200 characters or fewer" });
+    }
+
+    if (status !== undefined && !allowedStatuses.includes(status)) {
+      return res.status(400).json({ success: false, message: "Invalid task status" });
+    }
+
+    if (priority !== undefined && !allowedPriorities.includes(priority)) {
+      return res.status(400).json({ success: false, message: "Invalid task priority" });
+    }
+
+    if (!allowedSortFields.includes(sortBy)) {
+      return res.status(400).json({ success: false, message: "Invalid sort field" });
+    }
+
+    if (!["asc", "desc"].includes(sortOrder)) {
+      return res.status(400).json({ success: false, message: "Sort order must be asc or desc" });
+    }
+
+    const parsedDueDateFrom = dueDateFrom === undefined ? undefined : parseDate(dueDateFrom);
+    const parsedDueDateTo = dueDateTo === undefined ? undefined : parseDate(dueDateTo);
+
+    if (
+      (dueDateFrom !== undefined && !parsedDueDateFrom) ||
+      (dueDateTo !== undefined && !parsedDueDateTo)
+    ) {
+      return res.status(400).json({ success: false, message: "Invalid due date filter" });
+    }
+
+    if (parsedDueDateFrom && parsedDueDateTo && parsedDueDateFrom > parsedDueDateTo) {
+      return res.status(400).json({ success: false, message: "Due date range is invalid" });
+    }
+
+    const where = { userId: req.user.id };
+
+    if (typeof search === "string" && search.trim()) {
+      where.OR = [
+        { title: { contains: search.trim(), mode: "insensitive" } },
+        { description: { contains: search.trim(), mode: "insensitive" } },
+      ];
+    }
+    if (status !== undefined) where.status = status;
+    if (priority !== undefined) where.priority = priority;
+    if (parsedDueDateFrom || parsedDueDateTo) {
+      where.dueDate = {
+        ...(parsedDueDateFrom ? { gte: parsedDueDateFrom } : {}),
+        ...(parsedDueDateTo ? { lte: parsedDueDateTo } : {}),
+      };
+    }
+
+    const paginated = pageValue !== undefined || pageSizeValue !== undefined;
+    const page = paginated ? parsePositiveInteger(pageValue ?? "1", 1, 1000000) : undefined;
+    const pageSize = paginated ? parsePositiveInteger(pageSizeValue ?? "20", 20, 100) : undefined;
+
+    if (paginated && (!page || !pageSize)) {
+      return res.status(400).json({
+        success: false,
+        message: "Page must be positive and pageSize must be between 1 and 100",
+      });
+    }
+
+    const findManyOptions = {
+      where,
+      orderBy: { [sortBy]: sortOrder },
+      ...(paginated ? { skip: (page - 1) * pageSize, take: pageSize } : {}),
+    };
+
+    const [tasks, total] = await Promise.all([
+      prisma.task.findMany(findManyOptions),
+      paginated ? prisma.task.count({ where }) : Promise.resolve(null),
+    ]);
 
     return res.status(200).json({
       success: true,
-      count: tasks.length,
+      count: paginated ? total : tasks.length,
       data: tasks,
+      ...(paginated ? { pagination: { page, pageSize, total } } : {}),
     });
   } catch (error) {
     console.error("Get tasks error:", error);
@@ -117,6 +246,38 @@ async function getTasks(req, res) {
     return res.status(500).json({
       success: false,
       message: "Could not retrieve tasks",
+    });
+  }
+}
+
+async function getTaskStatistics(req, res) {
+  try {
+    const userFilter = { userId: req.user.id };
+    const now = new Date();
+    const [total, pending, inProgress, completed, overdue] = await Promise.all([
+      prisma.task.count({ where: userFilter }),
+      prisma.task.count({ where: { ...userFilter, status: "PENDING" } }),
+      prisma.task.count({ where: { ...userFilter, status: "IN_PROGRESS" } }),
+      prisma.task.count({ where: { ...userFilter, status: "COMPLETED" } }),
+      prisma.task.count({
+        where: {
+          ...userFilter,
+          status: { not: "COMPLETED" },
+          dueDate: { lt: now },
+        },
+      }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: { total, pending, inProgress, completed, overdue },
+    });
+  } catch (error) {
+    console.error("Get task statistics error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Could not retrieve task statistics",
     });
   }
 }
@@ -229,27 +390,44 @@ async function updateTask(req, res) {
       });
     }
 
-    const result = await prisma.task.updateMany({
-      where: {
-        id: req.params.id,
-        userId: req.user.id,
-      },
-      data,
+    if (dueDate !== undefined) data.deadlineReminderSentAt = null;
+
+    const task = await prisma.$transaction(async (transaction) => {
+      const existingTask = await transaction.task.findFirst({
+        where: { id: req.params.id, userId: req.user.id },
+      });
+
+      if (!existingTask) return null;
+
+      const result = await transaction.task.updateMany({
+        where: {
+          id: req.params.id,
+          userId: req.user.id,
+        },
+        data,
+      });
+
+      if (result.count === 0) return null;
+
+      const updatedTask = await transaction.task.findFirst({
+        where: { id: req.params.id, userId: req.user.id },
+      });
+
+      await enqueueTaskEvent(transaction, "TaskUpdated", updatedTask);
+
+      if (existingTask.status !== "COMPLETED" && updatedTask.status === "COMPLETED") {
+        await enqueueTaskEvent(transaction, "TaskCompleted", updatedTask);
+      }
+
+      return updatedTask;
     });
 
-    if (result.count === 0) {
+    if (!task) {
       return res.status(404).json({
         success: false,
         message: "Task not found",
       });
     }
-
-    const task = await prisma.task.findFirst({
-      where: {
-        id: req.params.id,
-        userId: req.user.id,
-      },
-    });
 
     return res.status(200).json({ success: true, data: task });
   } catch (error) {
@@ -296,6 +474,7 @@ async function deleteTask(req, res) {
 module.exports = {
   createTask,
   getTasks,
+  getTaskStatistics,
   getTaskById,
   updateTask,
   deleteTask,

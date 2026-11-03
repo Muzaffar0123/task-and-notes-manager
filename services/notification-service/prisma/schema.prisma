@@ -7,15 +7,77 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Notification {
-  id        String   @id @default(uuid())
-  userId    String
-  taskId    String?
-  title     String
-  message   String
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+enum NotificationCategory {
+  TASK
+  FOLLOW
+  NOTE
+  LIKE
+  COMMENT
+  RATING
+  ANNOUNCEMENT
+  SYSTEM
+}
 
+enum ProcessedEventStatus {
+  PROCESSING
+  RETRY
+  PROCESSED
+  DEAD_LETTERED
+}
+
+model Notification {
+  id            String                @id @default(uuid())
+  userId        String
+  taskId        String?
+  title         String
+  message       String
+  isRead        Boolean               @default(false)
+  category      NotificationCategory  @default(SYSTEM)
+  sourceEventId String?
+  metadata      Json?
+  createdAt     DateTime              @default(now())
+
+  @@unique([userId, sourceEventId])
   @@index([userId, isRead])
+  @@index([userId, category, createdAt])
   @@index([createdAt])
+}
+
+model NotificationPreference {
+  id             String               @id @default(uuid())
+  userId         String
+  category       NotificationCategory
+  inAppEnabled   Boolean              @default(true)
+  emailEnabled   Boolean              @default(false)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@unique([userId, category])
+  @@index([userId])
+}
+
+model Announcement {
+  id            String   @id @default(uuid())
+  sourceEventId String   @unique
+  title         String
+  message       String
+  createdAt     DateTime @default(now())
+  publishedAt  DateTime?
+
+  @@index([publishedAt])
+}
+
+model ProcessedEvent {
+  eventId         String               @id
+  eventType       String
+  status          ProcessedEventStatus @default(PROCESSING)
+  payload         Json
+  attempts        Int                  @default(0)
+  processingUntil DateTime?
+  lastError       String?
+  processedAt     DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([status, updatedAt])
 }

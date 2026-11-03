@@ -26,9 +26,24 @@ model Task {
   status      TaskStatus   @default(PENDING)
   priority    TaskPriority @default(MEDIUM)
   dueDate     DateTime?
+  deadlineReminderSentAt DateTime?
   userId      String
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
   @@index([userId])
+  @@index([status, dueDate, deadlineReminderSentAt])
+}
+
+model TaskEventOutbox {
+  id          String   @id @default(uuid())
+  eventType   String
+  taskId      String
+  userId      String
+  payload     Json
+  createdAt   DateTime @default(now())
+  publishedAt DateTime?
+  attempts    Int      @default(0)
+
+  @@index([publishedAt, createdAt])
 }

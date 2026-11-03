@@ -40,6 +40,13 @@ function authenticateToken(req, res, next) {
         });
       }
 
+      if (!decoded || typeof decoded.sub !== "string") {
+        return res.status(401).json({
+          success: false,
+          message: "Invalid access token",
+        });
+      }
+
       req.user = { id: decoded.sub };
       next();
     }

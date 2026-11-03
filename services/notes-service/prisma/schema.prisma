@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum NoteVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum NoteStatus {
+  DRAFT
+  PUBLISHED
+  RESTRICTED
+}
+
+enum NoteReportStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+}
+
+enum ModerationAction {
+  RESTRICTED
+  RESTORED
+}
+
+model Note {
+  id              String             @id @default(uuid())
+  ownerId         String
+  title           String             @db.VarChar(200)
+  description     String             @default("") @db.Text
+  visibility      NoteVisibility     @default(PRIVATE)
+  status          NoteStatus         @default(DRAFT)
+  publishedAt     DateTime?
+  viewCount       Int                @default(0)
+  downloadCount   Int                @default(0)
+  popularityScore Int                @default(0)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  categories      NoteCategory[]     @relation("NoteCategories")
+  tags            NoteTag[]          @relation("NoteTags")
+  files           NoteFile[]
+  reports         NoteReport[]
+  moderation      ModerationRecord[]
+  likes           NoteLike[]
+  ratings         NoteRating[]
+
+  @@index([ownerId, updatedAt])
+  @@index([visibility, status, publishedAt])
+  @@index([visibility, status, popularityScore])
+  @@index([visibility, status, createdAt])
+}
+
+model NoteLike {
+  id        String   @id @default(uuid())
+  noteId    String
+  userId    String
+  createdAt DateTime @default(now())
+  note      Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, userId])
+  @@index([noteId, createdAt])
+}
+
+model NoteRating {
+  id        String   @id @default(uuid())
+  noteId    String
+  userId    String
+  value     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  note      Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, userId])
+  @@index([noteId, value])
+}
+
+model NoteFile {
+  id               String   @id @default(uuid())
+  noteId           String
+  storageKey       String   @unique
+  originalFilename String
+  contentType      String
+  sizeBytes        Int
+  createdAt        DateTime @default(now())
+  note             Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+}
+
+model NoteCategory {
+  id    String @id @default(uuid())
+  name  String @unique @db.VarChar(80)
+  notes Note[] @relation("NoteCategories")
+}
+
+model NoteTag {
+  id    String @id @default(uuid())
+  name  String @unique @db.VarChar(80)
+  notes Note[] @relation("NoteTags")
+}
+
+model NoteReport {
+  id         String           @id @default(uuid())
+  noteId     String
+  reporterId String
+  reason     String           @db.VarChar(1000)
+  status     NoteReportStatus @default(OPEN)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  note       Note             @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@unique([noteId, reporterId])
+  @@index([status, createdAt])
+  @@index([noteId])
+}
+
+model ModerationRecord {
+  id        String           @id @default(uuid())
+  noteId    String
+  adminId   String
+  action    ModerationAction
+  reason    String           @db.VarChar(1000)
+  createdAt DateTime         @default(now())
+  note      Note             @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId, createdAt])
+  @@index([adminId, createdAt])
+}
+
+model NoteEventOutbox {
+  id          String    @id @default(uuid())
+  eventType   String
+  noteId      String
+  ownerId     String
+  payload     Json
+  createdAt   DateTime  @default(now())
+  publishedAt DateTime?
+  attempts    Int       @default(0)
+
+  @@index([publishedAt, createdAt])
+}
